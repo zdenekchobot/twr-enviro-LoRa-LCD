@@ -6,4 +6,5 @@ Modules:
 - [CO2 module](https://obchod.hardwario.cz/co2-module/)
 - [Humidity tag](https://obchod.hardwario.cz/humidity-tag/)
 - [VOC-LP tag](https://obchod.hardwario.cz/voc-lp-tag/)
+- [Barometer tag](https://obchod.hardwario.cz/barometer-tag/)
 - [Battery module](https://obchod.hardwario.cz/battery-module/)

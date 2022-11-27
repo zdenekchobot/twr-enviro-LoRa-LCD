@@ -4,7 +4,8 @@ TOWER configuration:
     LCD module - LCD, 2x button, 6x RGB mini LED, gesture & proximity sensor
     LoRa module
     CO2 module
-    H  umidity tag
+    Barometer tag
+    Humidity tag
     VOC-LP tag
     Mini battery module
 */
@@ -15,13 +16,14 @@ TOWER configuration:
 #define HUMIDITY_UPDATE_INTERVAL (1 * 60 * 1000)
 #define CO2_UPDATE_INTERVAL (2 * 60 * 1000)
 #define TVOC_UPDATE_INTERVAL (5 * 60 * 1000)
+#define PRESSURE_UPDATE_INTERVAL (5 * 60 * 1000)
 #define BATTERY_UPDATE_INTERVAL (5 * 60 * 1000)
 
 #define CO2_CALIBRATION_DELAY (2 * 60 * 1000)
 #define CO2_CALIBRATION_INTERVAL (1 * 60 * 1000)
 #define CO2_UPDATE_SERVICE_INTERVAL (1 * 60 * 1000)
 
-#define MAX_PAGE_INDEX 2
+#define MAX_PAGE_INDEX 3
 
 #define PAGE_INDEX_MENU -1
 
@@ -49,10 +51,13 @@ twr_tmp112_t tmp112;
 */
 
 // Humidity tag instance
-twr_tag_humidity_t humi;
+twr_tag_humidity_t humi_tag;
 
 // VOC tag instance
 twr_tag_voc_lp_t voc_tag;
+
+// Barometer tag instance
+twr_tag_barometer_t bar_tag;
 
 // GFX pointer
 twr_gfx_t *pgfx;
@@ -61,6 +66,7 @@ static struct
 {
     float_t temperature;
     float_t humidity;
+    float_t pressure;
     float_t co2;
     float_t tvoc;
     float_t battery_voltage;
@@ -80,13 +86,15 @@ static const struct
     char *unit1;
 
 } pages[] = {
-    {"Temperature   ", "%.1f", &values.temperature, "\xb0"
+    {"Temperature   ", "%.1f", &values.temperature, " \xb0"
                                                     "C",
-     "Humidity      ", "%.0f", &values.humidity, "%"},
-    {"CO2           ", "%.0f", &values.co2, "ppm",
-     "TVOC          ", "%.0f", &values.tvoc, "ppb"},
+     "Humidity      ", "%.0f", &values.humidity, " %"},
+    {"CO2           ", "%.0f", &values.co2, " ppm",
+     "TVOC          ", "%.0f", &values.tvoc, " ppb"},
+    {"Air pressure  ", "%.0f", &values.pressure, " hPa",
+     "", "%.0f", 0, ""},
     {"Battery       ", "%.2f", &values.battery_voltage, "V",
-     "Battery       ", "%.0f", &values.battery_pct, "%"},
+     "Battery       ", "%.0f", &values.battery_pct, " %"},
 };
 
 static int page_index = 0;
@@ -98,6 +106,7 @@ TWR_DATA_STREAM_FLOAT_BUFFER(sm_voltage_buffer, SEND_DATA_INTERVAL / BATTERY_UPD
 TWR_DATA_STREAM_FLOAT_BUFFER(sm_percentage_buffer, SEND_DATA_INTERVAL / BATTERY_UPDATE_INTERVAL)
 TWR_DATA_STREAM_FLOAT_BUFFER(sm_temperature_buffer, (SEND_DATA_INTERVAL / HUMIDITY_UPDATE_INTERVAL))
 TWR_DATA_STREAM_FLOAT_BUFFER(sm_humidity_buffer, (SEND_DATA_INTERVAL / HUMIDITY_UPDATE_INTERVAL))
+TWR_DATA_STREAM_FLOAT_BUFFER(sm_pressure_buffer, (SEND_DATA_INTERVAL / PRESSURE_UPDATE_INTERVAL))
 TWR_DATA_STREAM_FLOAT_BUFFER(sm_co2_buffer, (SEND_DATA_INTERVAL / CO2_UPDATE_INTERVAL))
 TWR_DATA_STREAM_FLOAT_BUFFER(sm_voc_buffer, (SEND_DATA_INTERVAL / TVOC_UPDATE_INTERVAL))
 
@@ -107,6 +116,7 @@ twr_data_stream_t sm_temperature;
 twr_data_stream_t sm_humidity;
 twr_data_stream_t sm_co2;
 twr_data_stream_t sm_voc;
+twr_data_stream_t sm_pressure;
 
 twr_scheduler_task_id_t calibration_task_id;
 
@@ -370,7 +380,7 @@ void tag_humidity_event_handler(twr_tag_humidity_t *self, twr_tag_humidity_event
     }
 }
 
-void voc_tag_event_handler(twr_tag_voc_lp_t *self, twr_tag_voc_lp_event_t event, void *event_param)
+void tag_voc_event_handler(twr_tag_voc_lp_t *self, twr_tag_voc_lp_event_t event, void *event_param)
 {
 
     if (event == TWR_TAG_VOC_LP_EVENT_UPDATE)
@@ -388,6 +398,26 @@ void voc_tag_event_handler(twr_tag_voc_lp_t *self, twr_tag_voc_lp_event_t event,
         else
         {
             twr_log_debug("VOC TAG: Invalid TVOC value");
+        }
+    }
+}
+
+void tag_barometer_event_handler(twr_tag_barometer_t *self, twr_tag_barometer_event_t event, void *event_param)
+{
+    if (event == TWR_TAG_BAROMETER_EVENT_UPDATE)
+    {
+        float pressure = NAN;
+        if (twr_tag_barometer_get_pressure_pascal(self, &pressure))
+        {
+            pressure /= 100; // Pa to hPa
+            twr_data_stream_feed(&sm_pressure, &pressure);
+            values.pressure = pressure;
+            lcd_draw();
+            twr_log_debug("BAROMETER TAG: Air pressure: %.0f hPa", pressure);
+        }
+        else
+        {
+            twr_log_debug("BAROMETER TAG: Invalid air pressure value");
         }
     }
 }
@@ -491,11 +521,11 @@ void lora_callback(twr_cmwx1zzabz_t *self, twr_cmwx1zzabz_event_t event, void *e
     }
     else if (event == TWR_CMWX1ZZABZ_EVENT_JOIN_SUCCESS)
     {
-        twr_atci_printf("$JOIN_OK");
+        twr_atci_printf("$JOIN_OK\n");
     }
     else if (event == TWR_CMWX1ZZABZ_EVENT_JOIN_ERROR)
     {
-        twr_atci_printf("$JOIN_ERROR");
+        twr_atci_printf("$JOIN_ERROR\n");
     }
 }
 
@@ -519,8 +549,9 @@ bool at_status(void)
         {&sm_voltage, "Voltage", 2},
         {&sm_percentage, "Charge level", 0},
         {&sm_temperature, "Temperature", 1},
-        {&sm_humidity, "Humidity", 1},
-        {&sm_co2, "CO2", 1},
+        {&sm_humidity, "Humidity", 0},
+        {&sm_pressure, "Air pressure", 0},
+        {&sm_co2, "CO2", 0},
         {&sm_voc, "VOC", 0},
     };
 
@@ -530,11 +561,11 @@ bool at_status(void)
 
         if (twr_data_stream_get_average(values[i].stream, &value_avg))
         {
-            twr_atci_printf("$STATUS: \"%s\",%.*f\n", values[i].name, values[i].precision, value_avg);
+            twr_atci_printfln("%s: %.*f", values[i].name, values[i].precision, value_avg);
         }
         else
         {
-            twr_atci_printf("$STATUS: \"%s\", -\n", values[i].name);
+            twr_atci_printfln("%s: -", values[i].name);
         }
     }
 
@@ -562,6 +593,7 @@ void application_init(void)
     twr_data_stream_init(&sm_percentage, 1, &sm_percentage_buffer);
     twr_data_stream_init(&sm_temperature, 1, &sm_temperature_buffer);
     twr_data_stream_init(&sm_humidity, 1, &sm_humidity_buffer);
+    twr_data_stream_init(&sm_pressure, 1, &sm_pressure_buffer);
     twr_data_stream_init(&sm_co2, 1, &sm_co2_buffer);
     twr_data_stream_init(&sm_voc, 1, &sm_voc_buffer);
 
@@ -593,14 +625,19 @@ void application_init(void)
     */
 
     // Initialize humidity tag
-    twr_tag_humidity_init(&humi, TWR_TAG_HUMIDITY_REVISION_R3, TWR_I2C_I2C0, 0x40);
-    twr_tag_humidity_set_event_handler(&humi, tag_humidity_event_handler, NULL);
-    twr_tag_humidity_set_update_interval(&humi, HUMIDITY_UPDATE_INTERVAL);
+    twr_tag_humidity_init(&humi_tag, TWR_TAG_HUMIDITY_REVISION_R3, TWR_I2C_I2C0, 0x40);
+    twr_tag_humidity_set_event_handler(&humi_tag, tag_humidity_event_handler, NULL);
+    twr_tag_humidity_set_update_interval(&humi_tag, HUMIDITY_UPDATE_INTERVAL);
 
     // Initialize VOC tag
     twr_tag_voc_lp_init(&voc_tag, TWR_I2C_I2C0);
-    twr_tag_voc_lp_set_event_handler(&voc_tag, voc_tag_event_handler, NULL);
+    twr_tag_voc_lp_set_event_handler(&voc_tag, tag_voc_event_handler, NULL);
     twr_tag_voc_lp_set_update_interval(&voc_tag, TVOC_UPDATE_INTERVAL);
+
+    // Intitialize BAROMETER TAG
+    twr_tag_barometer_init(&bar_tag, TWR_I2C_I2C0);
+    twr_tag_barometer_set_event_handler(&bar_tag, tag_barometer_event_handler, NULL);
+    twr_tag_barometer_set_update_interval(&bar_tag, PRESSURE_UPDATE_INTERVAL);
 
     // Initialize CO2 module
     twr_module_co2_init();
@@ -638,7 +675,8 @@ void application_init(void)
     twr_atci_init(commands, TWR_ATCI_COMMANDS_LENGTH(commands));
 
     twr_module_battery_measure();
-    twr_tag_humidity_measure(&humi);
+    twr_tag_humidity_measure(&humi_tag);
+    twr_tag_barometer_measure(&bar_tag);
 
     twr_scheduler_plan_current_relative(10 * 1000);
 }
@@ -652,23 +690,18 @@ void application_task(void)
         return;
     }
 
-    static uint8_t buffer[10];
-
+    static uint8_t buffer[12];
     memset(buffer, 0xff, sizeof(buffer));
-
     buffer[0] = header;
 
-    float voltage_avg = NAN;
-
+    float voltage_avg = 0;
     twr_data_stream_get_average(&sm_voltage, &voltage_avg);
-
     if (!isnan(voltage_avg))
     {
         buffer[1] = ceil(voltage_avg * 30.f);
     }
 
-    float percentage_avg = NAN;
-
+    float percentage_avg = 0;
     twr_data_stream_get_average(&sm_percentage, &percentage_avg);
     if (!isnan(percentage_avg))
     {
@@ -677,9 +710,7 @@ void application_task(void)
     }
 
     float temperature_avg = NAN;
-
     twr_data_stream_get_average(&sm_temperature, &temperature_avg);
-
     if (!isnan(temperature_avg))
     {
         int16_t temperature_i16 = (int16_t)(temperature_avg * 10.f);
@@ -689,34 +720,27 @@ void application_task(void)
     }
 
     float humidity_avg = NAN;
-
     twr_data_stream_get_average(&sm_humidity, &humidity_avg);
-
     if (!isnan(humidity_avg))
     {
         buffer[5] = humidity_avg * 2;
     }
 
     float co2_avg = NAN;
-
     twr_data_stream_get_average(&sm_co2, &co2_avg);
-
     if (!isnan(co2_avg))
     {
         if (co2_avg > 65534)
         {
             co2_avg = 65534;
         }
-
         uint16_t value = (uint16_t)co2_avg;
         buffer[6] = value >> 8;
         buffer[7] = value;
     }
 
     float voc_avg = NAN;
-
     twr_data_stream_get_average(&sm_voc, &voc_avg);
-
     if (!isnan(voc_avg))
     {
         uint16_t value = (uint16_t)voc_avg;
@@ -724,14 +748,21 @@ void application_task(void)
         buffer[9] = value;
     }
 
-    twr_cmwx1zzabz_send_message(&lora, buffer, sizeof(buffer));
+    float pressure_avg = NAN;
+    twr_data_stream_get_average(&sm_pressure, &pressure_avg);
+    if (!isnan(pressure_avg))
+    {
+        uint16_t value = (uint16_t)pressure_avg;
+        buffer[10] = value >> 8;
+        buffer[11] = value;
+    }
 
+    twr_cmwx1zzabz_send_message(&lora, buffer, sizeof(buffer));
     static char tmp[sizeof(buffer) * 2 + 1];
     for (size_t i = 0; i < sizeof(buffer); i++)
     {
         sprintf(tmp + i * 2, "%02x", buffer[i]);
     }
-
     twr_atci_printf("$SEND: %s\n", tmp);
 
     header = HEADER_UPDATE;
