@@ -521,11 +521,23 @@ void lora_callback(twr_cmwx1zzabz_t *self, twr_cmwx1zzabz_event_t event, void *e
     }
     else if (event == TWR_CMWX1ZZABZ_EVENT_JOIN_SUCCESS)
     {
-        twr_atci_printf("$JOIN_OK\n");
+        twr_atci_printfln("$JOIN_OK");
     }
     else if (event == TWR_CMWX1ZZABZ_EVENT_JOIN_ERROR)
     {
-        twr_atci_printf("$JOIN_ERROR\n");
+        twr_atci_printfln("$JOIN_ERROR");
+    }
+    else if (event == TWR_CMWX1ZZABZ_EVENT_MESSAGE_RECEIVED)
+    {
+        twr_log_debug("Prijata zprava");
+        uint32_t message_lenght;
+        message_lenght = twr_cmwx1zzabz_get_received_message_length(&lora);
+        if (message_lenght > 0)
+        {
+            uint8_t buffer[message_lenght];
+            twr_cmwx1zzabz_get_received_message_data(&lora, buffer, message_lenght);
+            twr_atci_printfln("LoRa received msg: %s", buffer);
+        }
     }
 }
 
@@ -763,7 +775,7 @@ void application_task(void)
     {
         sprintf(tmp + i * 2, "%02x", buffer[i]);
     }
-    twr_atci_printf("$SEND: %s\n", tmp);
+    twr_atci_printfln("$SEND: %s", tmp);
 
     header = HEADER_UPDATE;
 
